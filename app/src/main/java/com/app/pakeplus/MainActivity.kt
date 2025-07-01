@@ -64,7 +64,6 @@ class MainActivity : AppCompatActivity() {
         webView.settings.loadWithOverviewMode = true
         webView.settings.setSupportZoom(false)
 
-
         // clear cache
         webView.clearCache(true)
 

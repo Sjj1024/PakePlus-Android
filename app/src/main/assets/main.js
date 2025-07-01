@@ -1,25 +1,25 @@
-let greetInputEl
-let greetMsgEl
-
-async function get_data() {
-    fetch('https://api.github.com/users/octocat')
-        .then((response) => response.json())
-        .then((data) => {
-            console.log('data', data)
-            greetMsgEl = document.querySelector('#greet-msg')
-            greetMsgEl.textContent = data.login
-            greetInputEl.value = data.login
-        })
-        .catch((error) => {
-            console.error('error', error)
-        })
+function sayHello() {
+    alert('你好，这是本地JS代码！')
 }
 
+
+console.log('main.js---')
+
 window.addEventListener('DOMContentLoaded', () => {
-    greetInputEl = document.querySelector('#greet-input')
-    document.querySelector('#getdata').addEventListener('click', (e) => {
+    console.log('DOMContentLoaded-----')
+    const getdata = document.querySelector('#getdata')
+    getdata.addEventListener('click', (e) => {
         e.preventDefault()
         console.log('getdata')
-        get_data()
+        fetch('https://api.github.com/users/octocat')
+            .then((response) => response.json())
+            .then((data) => {
+                console.log('data', data)
+                const greetMsgEl = document.querySelector('#greet-msg')
+                greetMsgEl.textContent = data.login
+            })
+            .catch((error) => {
+                console.error('error', error)
+            })
     })
 })

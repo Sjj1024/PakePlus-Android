@@ -3,32 +3,14 @@
     <head>
         <meta charset="UTF-8" />
         <link rel="stylesheet" href="./styles.css" />
+        <meta
+            http-equiv="Content-Security-Policy"
+            content="default-src * 'unsafe-inline' 'unsafe-eval'"
+        />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Tauri App</title>
-        <!-- <script type="module" src="./main.js" defer></script> -->
-        <script>
-            window.addEventListener('DOMContentLoaded', () => {
-                console.log('DOMContentLoaded-----')
-                const getdata = document.querySelector('#getdata')
-                getdata.addEventListener('click', (e) => {
-                    e.preventDefault()
-                    console.log('getdata')
-                    fetch('https://api.github.com/users/octocat')
-                        .then((response) => response.json())
-                        .then((data) => {
-                            console.log('data', data)
-                            const greetMsgEl =
-                                document.querySelector('#greet-msg')
-                            greetMsgEl.textContent = data.login
-                        })
-                        .catch((error) => {
-                            console.error('error', error)
-                        })
-                })
-            })
-        </script>
+        <script src="main.js"></script>
     </head>
-
     <body>
         <main class="container">
             <h1>Welcome to TauriMan</h1>
@@ -62,6 +44,7 @@
                 <input id="greet-input" placeholder="Enter a name..." />
                 <button type="submit" id="getdata">GET DATA</button>
             </form>
+            <button onclick="sayHello()">点击我</button>
             <p id="greet-msg"></p>
             <video
                 src="https://files.pakeplus.com/test.mp4"
