@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -13,10 +14,13 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.webkit.WebChromeClient
+import android.webkit.JavascriptInterface
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebView.WebViewTransport
+import android.webkit.URLUtil
 import androidx.activity.enableEdgeToEdge
 // import android.view.Menu
 // import android.view.WindowInsets
@@ -32,10 +36,16 @@ import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.GestureDetectorCompat
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.net.toUri
 import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.IOException
+import java.io.InputStreamReader
+import java.net.URI
 import java.net.URISyntaxException
+import java.util.Locale
 import kotlin.math.abs
 
 class MainActivity : AppCompatActivity() {
@@ -49,6 +59,18 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val packageInfo = packageManager.getPackageInfo(packageName, 0)
+        val versionName = packageInfo.versionName ?: "unknown"
+        val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            packageInfo.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            packageInfo.versionCode.toLong()
+        }
+        Log.i(
+            "AppStartup",
+            "Build versionName=$versionName versionCode=$versionCode ts=${System.currentTimeMillis()}"
+        )
         // parseJsonWithNative
         val config = parseJsonWithNative(this, "app.json")
         val fullScreen = config?.get("fullScreen") as? Boolean ?: false
@@ -96,16 +118,14 @@ class MainActivity : AppCompatActivity() {
         }
         webView = findViewById<WebView>(R.id.webview)
         webView.settings.apply {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            allowFileAccess = true
+            javaScriptEnabled = true       // 启用JS
+            domStorageEnabled = true       // 启用DOM存储（Vue 需要）
+            allowFileAccess = true         // 允许文件访问
             useWideViewPort = true
-            allowFileAccessFromFileURLs = true
-            allowContentAccess = true
-            allowUniversalAccessFromFileURLs = true
             loadWithOverviewMode = true
             mediaPlaybackRequiresUserGesture = false
             setSupportMultipleWindows(true)
+            javaScriptCanOpenWindowsAutomatically = true
         }
         webView
         // set user agent
@@ -118,6 +138,23 @@ class MainActivity : AppCompatActivity() {
 
         // clear cache
         webView.clearCache(true)
+
+        // JS bridge for window.App.openBrowser / window.native.openOuter
+        val jsBridge = JsBridge(this)
+        webView.addJavascriptInterface(jsBridge, "App")
+        webView.addJavascriptInterface(jsBridge, "native")
+
+        // open download links in external browser
+        webView.setDownloadListener { url, _, _, _, _ ->
+            if (url.isNullOrBlank()) return@setDownloadListener
+            val safeUrl = if (URLUtil.isNetworkUrl(url)) url else return@setDownloadListener
+            Log.i("WebViewClient", "DownloadListener open external: $safeUrl")
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(safeUrl)))
+            } catch (e: Exception) {
+                Log.e("WebViewClient", "Failed to open download url: $safeUrl", e)
+            }
+        }
 
         // inject js
         webView.webViewClient = MyWebViewClient(debug)
@@ -247,7 +284,13 @@ class MainActivity : AppCompatActivity() {
         override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
             val url = url.toString()
 
-            // --- 处理外部应用链接 ---
+            // 检查链接是否是 HTTP/HTTPS，如果是，则继续在 WebView 中加载
+            if (url.startsWith("http://") || url.startsWith("https://")) {
+                return false // 返回 false，让 WebView 自己加载 URL
+            }
+
+            // --- 核心逻辑：处理外部应用链接 ---
+
             // 1. 检查是否是 Intent URI (e.g., intent://...)
             if (url.startsWith("intent://")) {
                 try {
@@ -303,6 +346,7 @@ class MainActivity : AppCompatActivity() {
             super.doUpdateVisitedHistory(view, url, isReload)
         }
 
+
         override fun onReceivedError(
             view: WebView?,
             request: WebResourceRequest?,
@@ -328,6 +372,29 @@ class MainActivity : AppCompatActivity() {
             val injectJs = assets.open("custom.js").bufferedReader().use { it.readText() }
             view?.evaluateJavascript(injectJs, null)
         }
+
+        override fun shouldOverrideUrlLoading(
+            view: WebView?,
+            request: WebResourceRequest?
+        ): Boolean {
+            val url = request?.url?.toString() ?: return false
+            // For main-frame HTTP/HTTPS, keep in WebView
+            if (url.startsWith("http://") || url.startsWith("https://")) {
+                if (request?.isForMainFrame == true && isLikelyDownloadUrl(url)) {
+                    Log.i("WebViewClient", "MainFrame download open external: $url")
+                    try {
+                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                    } catch (e: Exception) {
+                        Log.e("WebViewClient", "Failed to open download url: $url", e)
+                    }
+                    return true
+                }
+                return false
+            }
+            // Delegate non-http(s) handling to legacy path for external schemes
+            Log.i("WebViewClient", "Override non-http(s): $url")
+            return shouldOverrideUrlLoading(view, url)
+        }
     }
 
     inner class MyChromeClient : WebChromeClient() {
@@ -343,6 +410,87 @@ class MainActivity : AppCompatActivity() {
 
         override fun onHideCustomView() {
             super.onHideCustomView()
+        }
+
+        override fun onCreateWindow(
+            view: WebView?,
+            isDialog: Boolean,
+            isUserGesture: Boolean,
+            resultMsg: android.os.Message?
+        ): Boolean {
+            if (view == null || resultMsg == null) return false
+            Log.i("WebViewClient", "onCreateWindow gesture=$isUserGesture dialog=$isDialog")
+            val transport = resultMsg.obj as? WebViewTransport ?: return false
+            val childWebView = WebView(view.context)
+            childWebView.webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(
+                    v: WebView?,
+                    request: WebResourceRequest?
+                ): Boolean {
+                    val rawUrl = request?.url?.toString() ?: return true
+                    val resolvedUrl = resolveUrl(view.url, rawUrl)
+                    Log.i("WebViewClient", "TargetBlank open external: $resolvedUrl")
+                    try {
+                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(resolvedUrl)))
+                    } catch (e: Exception) {
+                        Log.e("WebViewClient", "Failed to open target=_blank: $resolvedUrl", e)
+                    }
+                    return true
+                }
+            }
+            transport.webView = childWebView
+            resultMsg.sendToTarget()
+            return true
+        }
+    }
+
+    private fun isLikelyDownloadUrl(url: String): Boolean {
+        val normalized = url.lowercase(Locale.US)
+        if (normalized.contains("/downfile/") || normalized.contains("/download/")) {
+            return true
+        }
+        return normalized.endsWith(".apk") ||
+            normalized.endsWith(".zip") ||
+            normalized.endsWith(".rar") ||
+            normalized.endsWith(".7z") ||
+            normalized.endsWith(".pdf")
+    }
+
+    private fun resolveUrl(baseUrl: String?, targetUrl: String): String {
+        if (targetUrl.startsWith("http://") || targetUrl.startsWith("https://")) {
+            return targetUrl
+        }
+        return try {
+            if (baseUrl.isNullOrBlank()) {
+                targetUrl
+            } else {
+                URI(baseUrl).resolve(targetUrl).toString()
+            }
+        } catch (e: Exception) {
+            targetUrl
+        }
+    }
+
+    class JsBridge(private val context: Context) {
+        @JavascriptInterface
+        fun openBrowser(url: String?) {
+            openExternal(url, "openBrowser")
+        }
+
+        @JavascriptInterface
+        fun openOuter(url: String?) {
+            openExternal(url, "openOuter")
+        }
+
+        private fun openExternal(url: String?, source: String) {
+            if (url.isNullOrBlank()) return
+            val safeUrl = if (URLUtil.isNetworkUrl(url)) url else return
+            Log.i("WebViewClient", "JsBridge $source open external: $safeUrl")
+            try {
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(safeUrl)))
+            } catch (e: Exception) {
+                Log.e("WebViewClient", "JsBridge failed to open: $safeUrl", e)
+            }
         }
     }
 }
