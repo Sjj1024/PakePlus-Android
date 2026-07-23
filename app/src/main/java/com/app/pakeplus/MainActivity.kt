@@ -1056,6 +1056,9 @@ class MainActivity : AppCompatActivity() {
                 val openDebug = """var vConsole = new window.VConsole()"""
                 view?.evaluateJavascript(vConsole + openDebug, null)
             }
+            // inject WebAssembly streaming shim before any page script and before custom.js
+            val wasmShim = assets.open("wasm-streaming-shim.js").bufferedReader().use { it.readText() }
+            view?.evaluateJavascript(wasmShim, null)
             // inject js
             val injectJs = assets.open("custom.js").bufferedReader().use { it.readText() }
             view?.evaluateJavascript(injectJs, null)
